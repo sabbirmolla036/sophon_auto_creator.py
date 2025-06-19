@@ -36,26 +36,41 @@ def create_account(playwright, invite_code, idx):
     )
 
     try:
-        # FIXED: Wait for #email (not #mail) selector
+        # Go to temp mail site
         page.goto("https://etempmail.net/", wait_until="networkidle")
-        page.wait_for_selector("#email", timeout=30000)  # wait max 30 sec
-        email = page.locator("#email").input_value()
+
+        # Grab email from iframe (usually second frame)
+        frames = page.frames
+        if len(frames) < 2:
+            raise Exception("Email iframe not found on etempmail.net")
+
+        iframe = frames[1]  # iframe with email input
+
+        iframe.wait_for_selector("#email", timeout=30000)
+        email = iframe.locator("#email").input_value()
         print(f"[{idx}] 📧 Temporary email: {email}")
 
+        # Go to sophon invite page
         page.goto(INVITE_LINK, wait_until="networkidle")
         page.fill('input[name="inviteCode"]', invite_code)
         page.fill('input[name="email"]', email)
         page.click('button[type="submit"]')
         print(f"[{idx}] Submitted invite and email, waiting for verification email...")
 
+        # Check temp mail inbox for verification code
         page.goto("https://etempmail.net/", wait_until="networkidle")
         verification_code = None
         for _ in range(20):
             time.sleep(3)
-            if page.locator(".message-item").count() > 0:
-                page.locator(".message-item").first.click()
-                page.wait_for_selector(".mail-text")
-                body = page.inner_text(".mail-text")
+            # Refresh frames after reload
+            frames = page.frames
+            if len(frames) < 2:
+                continue
+            iframe = frames[1]
+            if iframe.locator(".message-item").count() > 0:
+                iframe.locator(".message-item").first.click()
+                iframe.wait_for_selector(".mail-text")
+                body = iframe.inner_text(".mail-text")
                 match = re.search(r"\b(\d{4,8})\b", body)
                 if match:
                     verification_code = match.group(1)
