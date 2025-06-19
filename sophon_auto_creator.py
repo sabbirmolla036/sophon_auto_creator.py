@@ -4,13 +4,10 @@ import re
 import sys
 from playwright.sync_api import sync_playwright
 
-
-# === CONFIGURATION ===
 INVITE_LINK = "https://app.sophon.xyz/invite/"
-INVITE_CODE = "YOUR_INVITE_CODE_HERE"  # <-- Replace this with your invite code
 
 
-def create_account(playwright, idx):
+def create_account(playwright, invite_code, idx):
     # Random user-agent for stealth
     user_agent = (
         f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -33,7 +30,7 @@ def create_account(playwright, idx):
     }"""
     )
 
-    # Block images/styles/fonts for faster loading
+    # Block images/styles/fonts for speed
     page.route(
         "**/*",
         lambda route: route.abort()
@@ -45,11 +42,11 @@ def create_account(playwright, idx):
         # Step 1: Get temp email
         page.goto("https://etempmail.net/", wait_until="networkidle")
         email = page.locator("#mail").input_value()
-        print(f"[{idx}] Temporary email: {email}")
+        print(f"[{idx}] 📧 Temporary email: {email}")
 
         # Step 2: Visit Sophon invite page and submit invite code + email
         page.goto(INVITE_LINK, wait_until="networkidle")
-        page.fill('input[name="inviteCode"]', INVITE_CODE)
+        page.fill('input[name="inviteCode"]', invite_code)
         page.fill('input[name="email"]', email)
         page.click('button[type="submit"]')
         print(f"[{idx}] Submitted invite and email, waiting for verification email...")
@@ -76,7 +73,7 @@ def create_account(playwright, idx):
 
             # Step 4: Submit the verification code to complete signup
             page.goto(INVITE_LINK, wait_until="networkidle")
-            page.fill('input[name="inviteCode"]', INVITE_CODE)
+            page.fill('input[name="inviteCode"]', invite_code)
             page.fill('input[name="email"]', email)
             page.fill('input[name="verificationCode"]', verification_code)
             page.click('button[type="verify"]')
@@ -91,23 +88,25 @@ def create_account(playwright, idx):
 
 
 def main():
-    # Get number of accounts to create
-    if len(sys.argv) > 1:
+    # Get invite code from CLI or prompt
+    if len(sys.argv) > 2:
+        invite_code = sys.argv[1]
         try:
-            total_accounts = int(sys.argv[1])
+            total_accounts = int(sys.argv[2])
         except ValueError:
-            print("Invalid input. Usage: python sophon_account_creator.py <number_of_accounts>")
+            print("Invalid number of accounts. Usage: python sophon_account_creator.py <invite_code> <number_of_accounts>")
             return
     else:
+        invite_code = input("Enter your Sophon invite code: ").strip()
         total_accounts = int(input("Enter number of accounts to create: "))
 
     with sync_playwright() as playwright:
         for i in range(1, total_accounts + 1):
             try:
-                create_account(playwright, i)
+                create_account(playwright, invite_code, i)
             except Exception as e:
                 print(f"[{i}] ❌ Error during account creation: {e}")
-            time.sleep(random.uniform(5, 8))  # wait to reduce bot detection
+            time.sleep(random.uniform(5, 8))
 
 
 if __name__ == "__main__":
