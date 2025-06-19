@@ -9,10 +9,8 @@ from playwright.sync_api import sync_playwright
 MAIL_TM_BASE = "https://api.mail.tm"
 INVITE_URL = "https://app.sophon.xyz/invite/"
 
-
 def random_string(length=8):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
-
 
 def create_temp_email():
     for attempt in range(3):
@@ -25,7 +23,7 @@ def create_temp_email():
 
             reg = requests.post(f"{MAIL_TM_BASE}/accounts", json={"address": email, "password": password})
             if reg.status_code not in (200, 201):
-                print(f"[WARN] ইমেইল তৈরি করতে সমস্যা হচ্ছে, আবার চেষ্টা করছে... ({reg.status_code})")
+                print(f"[WARN] ইমেইল তৈরি ব্যর্থ, আবার চেষ্টা করছে... ({reg.status_code})")
                 continue
 
             token_resp = requests.post(f"{MAIL_TM_BASE}/token", json={"address": email, "password": password})
@@ -36,11 +34,10 @@ def create_temp_email():
             return email, password, token
 
         except Exception as e:
-            print(f"[ERROR] টেম্প ইমেইল তৈরিতে সমস্যা: {e}")
+            print(f"[ERROR] টেম্প ইমেইল ত্রুটি: {e}")
             time.sleep(2)
 
-    raise Exception("❌ ৩ বার চেষ্টা করেও টেম্প ইমেইল তৈরি হয়নি।")
-
+    raise Exception("❌ টেম্প ইমেইল তৈরি হয়নি (৩ বার চেষ্টা করেও)।")
 
 def get_verification_code(token):
     headers = {"Authorization": f"Bearer {token}"}
@@ -57,7 +54,6 @@ def get_verification_code(token):
                     return match.group(1)
     return None
 
-
 def create_account(playwright, invite_code, idx):
     browser = playwright.chromium.launch(headless=True)
     context = browser.new_context(ignore_https_errors=True)
@@ -65,43 +61,72 @@ def create_account(playwright, invite_code, idx):
 
     try:
         email, password, token = create_temp_email()
-        print(f"[{idx}] 📧 টেম্প ইমেইল তৈরি হয়েছে: {email}")
+        print(f"[{idx}] 📧 টেম্প ইমেইল তৈরি: {email}")
 
-        # Go to Sophon invite page
         page.goto(INVITE_URL, wait_until="load")
-        page.wait_for_selector("#email_field", timeout=60000)
+        time.sleep(2)
 
-        # Fill in email and invite code
-        page.fill("#email_field", email)
-        page.fill("input[type='text']", invite_code)
+        try:
+            page.wait_for_selector("#email_field", timeout=30000)
+            page.fill("#email_field", email)
+        except:
+            print(f"[{idx}] ⚠️ Warning: সরাসরি #email_field পাওয়া যায়নি, fallback চেষ্টা চলছে...")
+            inputs = page.locator("input")
+            for i in range(inputs.count()):
+                try:
+                    placeholder = inputs.nth(i).get_attribute("placeholder")
+                    if placeholder and "email" in placeholder.lower():
+                        inputs.nth(i).fill(email)
+                        break
+                except:
+                    continue
+
+        # Fill invite code
+        try:
+            page.fill("input[type='text']", invite_code)
+        except:
+            print(f"[{idx}] ⚠️ Invite code ইনপুট খুঁজে পাওয়া যাচ্ছে না!")
+
         page.click("button")
 
-        print(f"[{idx}] 📨 ইমেইল ও ইনভাইট কোড সাবমিট হয়েছে। কোডের জন্য অপেক্ষা করছে...")
+        print(f"[{idx}] 📨 ইমেইল ও কোড সাবমিট হয়েছে। কোডের জন্য অপেক্ষা করছে...")
 
-        # Wait for code from email
         code = get_verification_code(token)
         if not code:
-            print(f"[{idx}] ❌ ভেরিফিকেশন কোড পাওয়া যায়নি।")
+            print(f"[{idx}] ❌ কোড পাওয়া যায়নি।")
             return
 
         print(f"[{idx}] ✅ কোড পাওয়া গেছে: {code}")
 
-        # Go back and submit verification code
+        # আবার ফর্ম সাবমিট
         page.goto(INVITE_URL, wait_until="load")
-        page.fill("#email_field", email)
+        time.sleep(2)
+
+        try:
+            page.wait_for_selector("#email_field", timeout=30000)
+            page.fill("#email_field", email)
+        except:
+            inputs = page.locator("input")
+            for i in range(inputs.count()):
+                try:
+                    ph = inputs.nth(i).get_attribute("placeholder")
+                    if ph and "email" in ph.lower():
+                        inputs.nth(i).fill(email)
+                        break
+                except:
+                    continue
+
         page.fill("input[type='text']", invite_code)
         page.fill("input[type='number']", code)
         page.click("button")
 
-        print(f"[{idx}] 🎉 অ্যাকাউন্ট #{idx} সফলভাবে তৈরি হয়েছে!")
+        print(f"[{idx}] 🎉 সফলভাবে অ্যাকাউন্ট #{idx} তৈরি হয়েছে!")
 
     except Exception as e:
-        print(f"[{idx}] ❌ সমস্যা: {e}")
-
+        print(f"[{idx}] ❌ ত্রুটি: {e}")
     finally:
         context.close()
         browser.close()
-
 
 def main():
     invite_code = input("🔑 আপনার Sophon ইনভাইট কোড দিন: ").strip()
@@ -111,7 +136,6 @@ def main():
         for i in range(1, total + 1):
             create_account(playwright, invite_code, i)
             time.sleep(random.uniform(5, 8))
-
 
 if __name__ == "__main__":
     main()
