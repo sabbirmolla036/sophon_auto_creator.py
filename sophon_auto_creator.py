@@ -11,9 +11,9 @@ def random_string(length=10):
     letters = string.ascii_lowercase + string.digits
     return ''.join(random.choice(letters) for _ in range(length))
 
-# getnada ডোমেইন গুলো
+# getnada ডোমেইন লিস্ট
 GETNADA_DOMAINS = [
-    "getnada.com", "nada.email", "amail.club", "robot-mail.com", "cafemom.com",
+    "getnada.com", "nada.email", "amail.club", "robot-mail.com", 
     "tafmail.com", "dropjar.com", "easytrashmail.com"
 ]
 
@@ -23,15 +23,15 @@ def create_temp_email():
     email = f"{user}@{domain}"
     return user, domain, email
 
-def get_messages(email):
-    url = f"https://getnada.com/api/v1/inboxes/{email}"
+def get_messages(username):  # username = email.split("@")[0]
+    url = f"https://getnada.com/api/v1/inboxes/{username}"
     try:
         resp = requests.get(url)
         resp.raise_for_status()
         data = resp.json()
         return data.get("msgs", [])
     except Exception as e:
-        print(f"Error fetching messages for {email}: {e}")
+        print(f"Error fetching messages for {username}: {e}")
         return []
 
 def read_message(message_id):
@@ -44,16 +44,16 @@ def read_message(message_id):
         print(f"Error reading message {message_id}: {e}")
         return None
 
-def get_verification_code(email, wait_time=120):
+def get_verification_code(username, wait_time=120):
     start = time.time()
     pattern = r"Enter the code below on the login screen to continue:\s*(\d{6})"
     while time.time() - start < wait_time:
-        messages = get_messages(email)
+        messages = get_messages(username)
         for msg in messages:
             msg_data = read_message(msg["uid"])
             if msg_data:
                 body = msg_data.get("text", "") + " " + msg_data.get("html", "")
-                print(f"[DEBUG] মেইল বডি:\n{body}\n{'-'*50}")
+                print(f"[DEBUG] মেইল:\n{body}\n{'-'*50}")
                 match = re.search(pattern, body)
                 if match:
                     return match.group(1)
@@ -72,9 +72,10 @@ def create_account(playwright, invite_code, idx):
         page.goto(INVITE_URL, wait_until="load")
         time.sleep(2)
 
+        # ইমেইল ফিল ইনপুট খোঁজা
         try:
             page.fill("#email_field", email)
-        except Exception:
+        except:
             print(f"[{idx}] ⚠️ #email_field পাওয়া যায়নি, fallback চলছে...")
             inputs = page.locator("input")
             for i in range(inputs.count()):
@@ -86,16 +87,17 @@ def create_account(playwright, invite_code, idx):
                 except:
                     continue
 
+        # ইনভাইট কোড সাবমিট
         try:
             page.fill("input[type='text']", invite_code)
-        except Exception:
+        except:
             print(f"[{idx}] ⚠️ ইনভাইট কোড ইনপুট খুঁজে পাওয়া যায়নি!")
 
         page.click("button")
 
         print(f"[{idx}] 📨 ইমেইল ও কোড সাবমিট হয়েছে। কোডের জন্য অপেক্ষা করছে...")
 
-        code = get_verification_code(email)
+        code = get_verification_code(user)
         if not code:
             print(f"[{idx}] ❌ কোড পাওয়া যায়নি।")
             return
@@ -105,8 +107,8 @@ def create_account(playwright, invite_code, idx):
         try:
             page.fill("input[type='number']", code)
             page.click("button")
-        except Exception:
-            print(f"[{idx}] ⚠️ ভেরিফিকেশন কোড ফিল্ড বা সাবমিট বোতাম পাওয়া যায়নি!")
+        except:
+            print(f"[{idx}] ⚠️ ভেরিফিকেশন কোড ইনপুট/বাটন পাওয়া যায়নি!")
 
         print(f"[{idx}] 🎉 সফলভাবে অ্যাকাউন্ট #{idx} তৈরি হয়েছে!")
 
