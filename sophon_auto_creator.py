@@ -8,7 +8,6 @@ INVITE_LINK = "https://app.sophon.xyz/invite/"
 
 
 def create_account(playwright, invite_code, idx):
-    # Random user-agent for stealth
     user_agent = (
         f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         f"(KHTML, like Gecko) Chrome/{random.randint(90,114)}.0.{random.randint(1000,4000)}.0 Safari/537.36"
@@ -23,14 +22,12 @@ def create_account(playwright, invite_code, idx):
     )
     page = context.new_page()
 
-    # Anti-bot JS
     page.add_init_script(
         """() => {
         Object.defineProperty(navigator, 'webdriver', { get: () => false });
     }"""
     )
 
-    # Block images/styles/fonts for speed
     page.route(
         "**/*",
         lambda route: route.abort()
@@ -39,19 +36,18 @@ def create_account(playwright, invite_code, idx):
     )
 
     try:
-        # Step 1: Get temp email
+        # FIXED: Wait for #email (not #mail) selector
         page.goto("https://etempmail.net/", wait_until="networkidle")
-        email = page.locator("#mail").input_value()
+        page.wait_for_selector("#email", timeout=30000)  # wait max 30 sec
+        email = page.locator("#email").input_value()
         print(f"[{idx}] 📧 Temporary email: {email}")
 
-        # Step 2: Visit Sophon invite page and submit invite code + email
         page.goto(INVITE_LINK, wait_until="networkidle")
         page.fill('input[name="inviteCode"]', invite_code)
         page.fill('input[name="email"]', email)
         page.click('button[type="submit"]')
         print(f"[{idx}] Submitted invite and email, waiting for verification email...")
 
-        # Step 3: Poll etempmail for verification code
         page.goto("https://etempmail.net/", wait_until="networkidle")
         verification_code = None
         for _ in range(20):
@@ -71,7 +67,6 @@ def create_account(playwright, invite_code, idx):
         else:
             print(f"[{idx}] Verification code received: {verification_code}")
 
-            # Step 4: Submit the verification code to complete signup
             page.goto(INVITE_LINK, wait_until="networkidle")
             page.fill('input[name="inviteCode"]', invite_code)
             page.fill('input[name="email"]', email)
@@ -88,7 +83,6 @@ def create_account(playwright, invite_code, idx):
 
 
 def main():
-    # Get invite code from CLI or prompt
     if len(sys.argv) > 2:
         invite_code = sys.argv[1]
         try:
