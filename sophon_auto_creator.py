@@ -2,9 +2,58 @@ import time
 import random
 import re
 import sys
+import requests
 from playwright.sync_api import sync_playwright
 
 INVITE_LINK = "https://app.sophon.xyz/invite/"
+MAIL_TM_BASE = "https://api.mail.tm"
+
+
+def create_temp_email():
+    # Get domains available
+    resp = requests.get(f"{MAIL_TM_BASE}/domains")
+    resp.raise_for_status()
+    domains = resp.json()["hydra:member"]
+    domain = domains[0]["domain"]  # pick first domain
+
+    # Create random user part
+    user = f"user{random.randint(100000,999999)}"
+    email = f"{user}@{domain}"
+    password = "Password123!"
+
+    # Register account on mail.tm
+    data = {"address": email, "password": password}
+    resp = requests.post(f"{MAIL_TM_BASE}/accounts", json=data)
+    if resp.status_code not in (200, 201):
+        raise Exception(f"Failed to create temp mail account: {resp.text}")
+
+    # Get token for mail.tm API auth
+    resp = requests.post(f"{MAIL_TM_BASE}/token", json={"address": email, "password": password})
+    resp.raise_for_status()
+    token = resp.json()["token"]
+
+    return email, password, token
+
+
+def get_latest_verification_code(token):
+    headers = {"Authorization": f"Bearer {token}"}
+    # Poll inbox for 60 seconds max
+    for _ in range(20):
+        resp = requests.get(f"{MAIL_TM_BASE}/messages", headers=headers)
+        resp.raise_for_status()
+        messages = resp.json()["hydra:member"]
+        for msg in messages:
+            if "Sophon" in msg["subject"] or "verification" in msg["subject"].lower():
+                # Get full message
+                msg_resp = requests.get(f"{MAIL_TM_BASE}/messages/{msg['id']}", headers=headers)
+                msg_resp.raise_for_status()
+                body = msg_resp.json()["text"]
+                # Extract 4-8 digit code
+                match = re.search(r"\b(\d{4,8})\b", body)
+                if match:
+                    return match.group(1)
+        time.sleep(3)
+    return None
 
 
 def create_account(playwright, invite_code, idx):
@@ -28,53 +77,38 @@ def create_account(playwright, invite_code, idx):
     }"""
     )
 
-    page.route(
-        "**/*",
-        lambda route: route.abort()
-        if route.request.resource_type in ["image", "stylesheet", "font"]
-        else route.continue_(),
-    )
-
     try:
-        # Step 1: Get temp email from etempmail.net
-        page.goto("https://etempmail.net/", wait_until="networkidle")
-        page.wait_for_selector("#mail", timeout=45000)  # wait up to 45 sec
-        email = page.locator("#mail").input_value()
-        print(f"[{idx}] 📧 Temporary email: {email}")
+        # Step 1: Create temp mail
+        email, password, token = create_temp_email()
+        print(f"[{idx}] 📧 Temp email created: {email}")
 
-        # Step 2: Use sophon invite link to submit invite code and email
+        # Step 2: Go to Sophon invite page and fill form
         page.goto(INVITE_LINK, wait_until="networkidle")
+
+        # Assuming these are the input field selectors - adjust if needed
         page.fill('input[name="inviteCode"]', invite_code)
         page.fill('input[name="email"]', email)
         page.click('button[type="submit"]')
-        print(f"[{idx}] Submitted invite and email, waiting for verification email...")
 
-        # Step 3: Poll etempmail.net inbox for verification code
-        page.goto("https://etempmail.net/", wait_until="networkidle")
-        verification_code = None
-        for _ in range(20):
-            time.sleep(3)
-            if page.locator(".message-item").count() > 0:
-                page.locator(".message-item").first.click()
-                page.wait_for_selector(".mail-text")
-                body = page.inner_text(".mail-text")
-                match = re.search(r"\b(\d{4,8})\b", body)
-                if match:
-                    verification_code = match.group(1)
-                    break
-            page.reload(wait_until="networkidle")
+        print(f"[{idx}] Submitted invite code and email. Waiting for verification email...")
 
+        # Step 3: Poll mail.tm inbox for verification code
+        verification_code = get_latest_verification_code(token)
         if not verification_code:
-            print(f"[{idx}] ❌ Verification code not found, skipping.")
-        else:
-            print(f"[{idx}] Verification code received: {verification_code}")
+            print(f"[{idx}] ❌ Verification code not received. Skipping account.")
+            return
 
-            page.goto(INVITE_LINK, wait_until="networkidle")
-            page.fill('input[name="inviteCode"]', invite_code)
-            page.fill('input[name="email"]', email)
-            page.fill('input[name="verificationCode"]', verification_code)
-            page.click('button[type="verify"]')
-            print(f"[{idx}] ✅ Account #{idx} created successfully!")
+        print(f"[{idx}] Verification code received: {verification_code}")
+
+        # Step 4: Submit verification code to sophon.xyz
+        page.goto(INVITE_LINK, wait_until="networkidle")
+
+        page.fill('input[name="inviteCode"]', invite_code)
+        page.fill('input[name="email"]', email)
+        page.fill('input[name="verificationCode"]', verification_code)
+        page.click('button[type="verify"]')
+
+        print(f"[{idx}] ✅ Account #{idx} created successfully!")
 
     except Exception as e:
         print(f"[{idx}] ❌ Error: {e}")
@@ -90,7 +124,7 @@ def main():
         try:
             total_accounts = int(sys.argv[2])
         except ValueError:
-            print("Invalid number of accounts. Usage: python sophon_account_creator.py <invite_code> <number_of_accounts>")
+            print("Invalid number of accounts. Usage: python script.py <invite_code> <number_of_accounts>")
             return
     else:
         invite_code = input("Enter your Sophon invite code: ").strip()
