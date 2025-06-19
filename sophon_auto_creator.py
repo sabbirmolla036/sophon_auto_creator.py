@@ -37,17 +37,17 @@ def read_message(user, domain, message_id):
 
 def get_verification_code(user, domain, wait_time=120):
     start = time.time()
+    pattern = r"Enter the code below on the login screen to continue:\s*(\d{6})"
     while time.time() - start < wait_time:
         messages = get_messages(user, domain)
         for msg in messages:
-            subject = msg.get("subject", "").lower()
-            if "code" in subject or "verify" in subject or "sophon" in subject:
-                msg_data = read_message(user, domain, msg["id"])
-                if msg_data:
-                    body = msg_data.get("body", "") + " " + msg_data.get("textBody", "")
-                    code = re.search(r"\b(\d{4,8})\b", body)
-                    if code:
-                        return code.group(1)
+            # আমরা subject বা sender দিয়ে ফিল্টার করতে পারি যদি দরকার হয়
+            msg_data = read_message(user, domain, msg["id"])
+            if msg_data:
+                body = msg_data.get("body", "") + " " + msg_data.get("textBody", "")
+                match = re.search(pattern, body)
+                if match:
+                    return match.group(1)
         time.sleep(5)
     return None
 
@@ -94,26 +94,15 @@ def create_account(playwright, invite_code, idx):
 
         print(f"[{idx}] ✅ কোড পাওয়া গেছে: {code}")
 
-        page.goto(INVITE_URL, wait_until="load")
-        time.sleep(2)
+        # Sophon ওয়েবসাইটে কোড দিয়ে ভেরিফাই করুন
+        # প্রয়োজন অনুযায়ী নিচে কোড সাবমিশনের সিলেক্টর পরিবর্তন করুন
 
         try:
-            page.wait_for_selector("#email_field", timeout=15000)
-            page.fill("#email_field", email)
+            page.wait_for_selector("input[type='number']", timeout=15000)
+            page.fill("input[type='number']", code)
+            page.click("button")
         except:
-            inputs = page.locator("input")
-            for i in range(inputs.count()):
-                try:
-                    ph = inputs.nth(i).get_attribute("placeholder")
-                    if ph and "email" in ph.lower():
-                        inputs.nth(i).fill(email)
-                        break
-                except:
-                    continue
-
-        page.fill("input[type='text']", invite_code)
-        page.fill("input[type='number']", code)
-        page.click("button")
+            print(f"[{idx}] ⚠️ ভেরিফিকেশন কোড ফিল্ড বা সাবমিট বোতাম পাওয়া যায়নি!")
 
         print(f"[{idx}] 🎉 সফলভাবে অ্যাকাউন্ট #{idx} তৈরি হয়েছে!")
 
