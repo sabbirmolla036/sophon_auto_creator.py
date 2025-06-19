@@ -25,7 +25,7 @@ def create_temp_email():
 
             reg = requests.post(f"{MAIL_TM_BASE}/accounts", json={"address": email, "password": password})
             if reg.status_code not in (200, 201):
-                print(f"[WARN] Email registration failed, retrying... ({reg.status_code})")
+                print(f"[WARN] ইমেইল তৈরি করতে সমস্যা হচ্ছে, আবার চেষ্টা করছে... ({reg.status_code})")
                 continue
 
             token_resp = requests.post(f"{MAIL_TM_BASE}/token", json={"address": email, "password": password})
@@ -36,10 +36,10 @@ def create_temp_email():
             return email, password, token
 
         except Exception as e:
-            print(f"[ERROR] Temp mail error: {e}")
+            print(f"[ERROR] টেম্প ইমেইল তৈরিতে সমস্যা: {e}")
             time.sleep(2)
 
-    raise Exception("❌ Failed to create temp mail account after 3 attempts.")
+    raise Exception("❌ ৩ বার চেষ্টা করেও টেম্প ইমেইল তৈরি হয়নি।")
 
 
 def get_verification_code(token):
@@ -64,38 +64,39 @@ def create_account(playwright, invite_code, idx):
     page = context.new_page()
 
     try:
-        # Step 1: Create temp email
         email, password, token = create_temp_email()
-        print(f"[{idx}] 📧 Temp email created: {email}")
+        print(f"[{idx}] 📧 টেম্প ইমেইল তৈরি হয়েছে: {email}")
 
-        # Step 2: Go to invite page
+        # Go to Sophon invite page
         page.goto(INVITE_URL, wait_until="load")
-        page.wait_for_selector("input", timeout=60000)
+        page.wait_for_selector("#email_field", timeout=60000)
 
-        # Fill invite form (adjust selectors here)
-        page.fill("input[type='text']", invite_code)      # First text input
-        page.fill("input[type='email']", email)           # Email input
-        page.click("button")                              # Click first button (submit)
-        print(f"[{idx}] Submitted invite form.")
+        # Fill in email and invite code
+        page.fill("#email_field", email)
+        page.fill("input[type='text']", invite_code)
+        page.click("button")
 
-        # Step 3: Get code from mail.tm
+        print(f"[{idx}] 📨 ইমেইল ও ইনভাইট কোড সাবমিট হয়েছে। কোডের জন্য অপেক্ষা করছে...")
+
+        # Wait for code from email
         code = get_verification_code(token)
         if not code:
-            print(f"[{idx}] ❌ No verification code received.")
+            print(f"[{idx}] ❌ ভেরিফিকেশন কোড পাওয়া যায়নি।")
             return
 
-        print(f"[{idx}] ✅ Verification code: {code}")
+        print(f"[{idx}] ✅ কোড পাওয়া গেছে: {code}")
 
-        # Step 4: Return and submit code
+        # Go back and submit verification code
         page.goto(INVITE_URL, wait_until="load")
+        page.fill("#email_field", email)
         page.fill("input[type='text']", invite_code)
-        page.fill("input[type='email']", email)
         page.fill("input[type='number']", code)
         page.click("button")
-        print(f"[{idx}] 🎉 Account #{idx} created!")
+
+        print(f"[{idx}] 🎉 অ্যাকাউন্ট #{idx} সফলভাবে তৈরি হয়েছে!")
 
     except Exception as e:
-        print(f"[{idx}] ❌ Error: {e}")
+        print(f"[{idx}] ❌ সমস্যা: {e}")
 
     finally:
         context.close()
@@ -103,17 +104,13 @@ def create_account(playwright, invite_code, idx):
 
 
 def main():
-    if len(sys.argv) >= 3:
-        invite_code = sys.argv[1]
-        total = int(sys.argv[2])
-    else:
-        invite_code = input("Enter your Sophon invite code: ").strip()
-        total = int(input("Enter number of accounts to create: "))
+    invite_code = input("🔑 আপনার Sophon ইনভাইট কোড দিন: ").strip()
+    total = int(input("🔢 কয়টা অ্যাকাউন্ট বানাতে চান?: "))
 
     with sync_playwright() as playwright:
         for i in range(1, total + 1):
             create_account(playwright, invite_code, i)
-            time.sleep(random.uniform(4, 7))
+            time.sleep(random.uniform(5, 8))
 
 
 if __name__ == "__main__":
