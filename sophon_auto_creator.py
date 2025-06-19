@@ -2,113 +2,97 @@ import time
 import random
 import re
 import sys
+import string
 import requests
 from playwright.sync_api import sync_playwright
 
-INVITE_LINK = "https://app.sophon.xyz/invite/"
 MAIL_TM_BASE = "https://api.mail.tm"
+INVITE_URL = "https://app.sophon.xyz/invite/"
+
+
+def random_string(length=8):
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 
 def create_temp_email():
-    # Get domains available
-    resp = requests.get(f"{MAIL_TM_BASE}/domains")
-    resp.raise_for_status()
-    domains = resp.json()["hydra:member"]
-    domain = domains[0]["domain"]  # pick first domain
+    for attempt in range(3):
+        try:
+            domains = requests.get(f"{MAIL_TM_BASE}/domains").json()["hydra:member"]
+            domain = random.choice(domains)["domain"]
+            user = f"user{random.randint(100000,999999)}"
+            email = f"{user}@{domain}"
+            password = "Password123!"
 
-    # Create random user part
-    user = f"user{random.randint(100000,999999)}"
-    email = f"{user}@{domain}"
-    password = "Password123!"
+            reg = requests.post(f"{MAIL_TM_BASE}/accounts", json={"address": email, "password": password})
+            if reg.status_code not in (200, 201):
+                print(f"[WARN] Email registration failed, retrying... ({reg.status_code})")
+                continue
 
-    # Register account on mail.tm
-    data = {"address": email, "password": password}
-    resp = requests.post(f"{MAIL_TM_BASE}/accounts", json=data)
-    if resp.status_code not in (200, 201):
-        raise Exception(f"Failed to create temp mail account: {resp.text}")
+            token_resp = requests.post(f"{MAIL_TM_BASE}/token", json={"address": email, "password": password})
+            token = token_resp.json().get("token")
+            if not token:
+                continue
 
-    # Get token for mail.tm API auth
-    resp = requests.post(f"{MAIL_TM_BASE}/token", json={"address": email, "password": password})
-    resp.raise_for_status()
-    token = resp.json()["token"]
+            return email, password, token
 
-    return email, password, token
+        except Exception as e:
+            print(f"[ERROR] Temp mail error: {e}")
+            time.sleep(2)
+
+    raise Exception("❌ Failed to create temp mail account after 3 attempts.")
 
 
-def get_latest_verification_code(token):
+def get_verification_code(token):
     headers = {"Authorization": f"Bearer {token}"}
-    # Poll inbox for 60 seconds max
     for _ in range(20):
+        time.sleep(3)
         resp = requests.get(f"{MAIL_TM_BASE}/messages", headers=headers)
-        resp.raise_for_status()
-        messages = resp.json()["hydra:member"]
+        messages = resp.json().get("hydra:member", [])
         for msg in messages:
-            if "Sophon" in msg["subject"] or "verification" in msg["subject"].lower():
-                # Get full message
-                msg_resp = requests.get(f"{MAIL_TM_BASE}/messages/{msg['id']}", headers=headers)
-                msg_resp.raise_for_status()
-                body = msg_resp.json()["text"]
-                # Extract 4-8 digit code
+            if "Sophon" in msg["subject"]:
+                full = requests.get(f"{MAIL_TM_BASE}/messages/{msg['id']}", headers=headers).json()
+                body = full.get("text", "")
                 match = re.search(r"\b(\d{4,8})\b", body)
                 if match:
                     return match.group(1)
-        time.sleep(3)
     return None
 
 
 def create_account(playwright, invite_code, idx):
-    user_agent = (
-        f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        f"(KHTML, like Gecko) Chrome/{random.randint(90,114)}.0.{random.randint(1000,4000)}.0 Safari/537.36"
-    )
-
     browser = playwright.chromium.launch(headless=True)
-    context = browser.new_context(
-        user_agent=user_agent,
-        viewport={"width": random.randint(1280, 1920), "height": random.randint(720, 1080)},
-        java_script_enabled=True,
-        ignore_https_errors=True,
-    )
+    context = browser.new_context(ignore_https_errors=True)
     page = context.new_page()
 
-    page.add_init_script(
-        """() => {
-        Object.defineProperty(navigator, 'webdriver', { get: () => false });
-    }"""
-    )
-
     try:
-        # Step 1: Create temp mail
+        # Step 1: Create temp email
         email, password, token = create_temp_email()
         print(f"[{idx}] 📧 Temp email created: {email}")
 
-        # Step 2: Go to Sophon invite page and fill form
-        page.goto(INVITE_LINK, wait_until="networkidle")
+        # Step 2: Go to invite page
+        page.goto(INVITE_URL, wait_until="load")
+        page.wait_for_selector("input", timeout=60000)
 
-        # Assuming these are the input field selectors - adjust if needed
-        page.fill('input[name="inviteCode"]', invite_code)
-        page.fill('input[name="email"]', email)
-        page.click('button[type="submit"]')
+        # Fill invite form (adjust selectors here)
+        page.fill("input[type='text']", invite_code)      # First text input
+        page.fill("input[type='email']", email)           # Email input
+        page.click("button")                              # Click first button (submit)
+        print(f"[{idx}] Submitted invite form.")
 
-        print(f"[{idx}] Submitted invite code and email. Waiting for verification email...")
-
-        # Step 3: Poll mail.tm inbox for verification code
-        verification_code = get_latest_verification_code(token)
-        if not verification_code:
-            print(f"[{idx}] ❌ Verification code not received. Skipping account.")
+        # Step 3: Get code from mail.tm
+        code = get_verification_code(token)
+        if not code:
+            print(f"[{idx}] ❌ No verification code received.")
             return
 
-        print(f"[{idx}] Verification code received: {verification_code}")
+        print(f"[{idx}] ✅ Verification code: {code}")
 
-        # Step 4: Submit verification code to sophon.xyz
-        page.goto(INVITE_LINK, wait_until="networkidle")
-
-        page.fill('input[name="inviteCode"]', invite_code)
-        page.fill('input[name="email"]', email)
-        page.fill('input[name="verificationCode"]', verification_code)
-        page.click('button[type="verify"]')
-
-        print(f"[{idx}] ✅ Account #{idx} created successfully!")
+        # Step 4: Return and submit code
+        page.goto(INVITE_URL, wait_until="load")
+        page.fill("input[type='text']", invite_code)
+        page.fill("input[type='email']", email)
+        page.fill("input[type='number']", code)
+        page.click("button")
+        print(f"[{idx}] 🎉 Account #{idx} created!")
 
     except Exception as e:
         print(f"[{idx}] ❌ Error: {e}")
@@ -119,24 +103,17 @@ def create_account(playwright, invite_code, idx):
 
 
 def main():
-    if len(sys.argv) > 2:
+    if len(sys.argv) >= 3:
         invite_code = sys.argv[1]
-        try:
-            total_accounts = int(sys.argv[2])
-        except ValueError:
-            print("Invalid number of accounts. Usage: python script.py <invite_code> <number_of_accounts>")
-            return
+        total = int(sys.argv[2])
     else:
         invite_code = input("Enter your Sophon invite code: ").strip()
-        total_accounts = int(input("Enter number of accounts to create: "))
+        total = int(input("Enter number of accounts to create: "))
 
     with sync_playwright() as playwright:
-        for i in range(1, total_accounts + 1):
-            try:
-                create_account(playwright, invite_code, i)
-            except Exception as e:
-                print(f"[{i}] ❌ Error during account creation: {e}")
-            time.sleep(random.uniform(5, 8))
+        for i in range(1, total + 1):
+            create_account(playwright, invite_code, i)
+            time.sleep(random.uniform(4, 7))
 
 
 if __name__ == "__main__":
