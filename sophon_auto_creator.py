@@ -1,7 +1,6 @@
 import time
 import random
 import re
-import sys
 import string
 import requests
 from playwright.sync_api import sync_playwright
@@ -41,12 +40,13 @@ def create_temp_email():
 
 def get_verification_code(token):
     headers = {"Authorization": f"Bearer {token}"}
-    for _ in range(20):
+    for _ in range(40):  # প্রায় ২ মিনিট পর্যন্ত চেক
         time.sleep(3)
         resp = requests.get(f"{MAIL_TM_BASE}/messages", headers=headers)
         messages = resp.json().get("hydra:member", [])
         for msg in messages:
-            if "Sophon" in msg["subject"]:
+            subject = msg.get("subject", "").lower()
+            if "code" in subject or "verify" in subject or "sophon" in subject:
                 full = requests.get(f"{MAIL_TM_BASE}/messages/{msg['id']}", headers=headers).json()
                 body = full.get("text", "")
                 match = re.search(r"\b(\d{4,8})\b", body)
@@ -81,7 +81,6 @@ def create_account(playwright, invite_code, idx):
                 except:
                     continue
 
-        # Fill invite code
         try:
             page.fill("input[type='text']", invite_code)
         except:
@@ -98,7 +97,6 @@ def create_account(playwright, invite_code, idx):
 
         print(f"[{idx}] ✅ কোড পাওয়া গেছে: {code}")
 
-        # আবার ফর্ম সাবমিট
         page.goto(INVITE_URL, wait_until="load")
         time.sleep(2)
 
