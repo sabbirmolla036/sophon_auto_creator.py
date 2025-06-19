@@ -1,5 +1,7 @@
 import time
 import random
+import re
+import requests
 import string
 from playwright.sync_api import sync_playwright
 
@@ -9,14 +11,54 @@ def random_string(length=10):
     letters = string.ascii_lowercase + string.digits
     return ''.join(random.choice(letters) for _ in range(length))
 
+# getnada ডোমেইন গুলো
+GETNADA_DOMAINS = [
+    "getnada.com", "nada.email", "amail.club", "robot-mail.com", "cafemom.com",
+    "tafmail.com", "dropjar.com", "easytrashmail.com"
+]
+
 def create_temp_email():
     user = random_string(10)
-    domain = "1secmail.com"
+    domain = random.choice(GETNADA_DOMAINS)
     email = f"{user}@{domain}"
     return user, domain, email
 
-def get_verification_code_manual(idx):
-    return input(f"[{idx}] ইমেইল থেকে ভেরিফিকেশন কোড দিন (কপি করে পেস্ট করুন): ").strip()
+def get_messages(email):
+    url = f"https://getnada.com/api/v1/inboxes/{email}"
+    try:
+        resp = requests.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("msgs", [])
+    except Exception as e:
+        print(f"Error fetching messages for {email}: {e}")
+        return []
+
+def read_message(message_id):
+    url = f"https://getnada.com/api/v1/messages/{message_id}"
+    try:
+        resp = requests.get(url)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"Error reading message {message_id}: {e}")
+        return None
+
+def get_verification_code(email, wait_time=120):
+    start = time.time()
+    pattern = r"Enter the code below on the login screen to continue:\s*(\d{6})"
+    while time.time() - start < wait_time:
+        messages = get_messages(email)
+        for msg in messages:
+            msg_data = read_message(msg["uid"])
+            if msg_data:
+                body = msg_data.get("text", "") + " " + msg_data.get("html", "")
+                print(f"[DEBUG] মেইল বডি:\n{body}\n{'-'*50}")
+                match = re.search(pattern, body)
+                if match:
+                    return match.group(1)
+        time.sleep(5)
+    return None
 
 def create_account(playwright, invite_code, idx):
     browser = playwright.chromium.launch(headless=True)
@@ -30,11 +72,10 @@ def create_account(playwright, invite_code, idx):
         page.goto(INVITE_URL, wait_until="load")
         time.sleep(2)
 
-        # ইমেইল ফিল্ড খোঁজা ও পূরণ
         try:
             page.fill("#email_field", email)
-        except:
-            print(f"[{idx}] ⚠️ #email_field পাওয়া যায়নি, fallback চেষ্টা চলছে...")
+        except Exception:
+            print(f"[{idx}] ⚠️ #email_field পাওয়া যায়নি, fallback চলছে...")
             inputs = page.locator("input")
             for i in range(inputs.count()):
                 try:
@@ -45,28 +86,27 @@ def create_account(playwright, invite_code, idx):
                 except:
                     continue
 
-        # ইনভাইট কোড পূরণ
         try:
             page.fill("input[type='text']", invite_code)
-        except:
+        except Exception:
             print(f"[{idx}] ⚠️ ইনভাইট কোড ইনপুট খুঁজে পাওয়া যায়নি!")
 
-        # সাবমিট বাটনে ক্লিক
         page.click("button")
 
-        print(f"[{idx}] 📨 ইমেইল ও কোড সাবমিট হয়েছে। ইমেইল খুলে কোড কপি করে এখানে পেস্ট করুন।")
+        print(f"[{idx}] 📨 ইমেইল ও কোড সাবমিট হয়েছে। কোডের জন্য অপেক্ষা করছে...")
 
-        code = get_verification_code_manual(idx)
+        code = get_verification_code(email)
         if not code:
-            print(f"[{idx}] ❌ কোড দেওয়া হয়নি।")
+            print(f"[{idx}] ❌ কোড পাওয়া যায়নি।")
             return
 
-        # কোড সাবমিট করা
+        print(f"[{idx}] ✅ কোড পাওয়া গেছে: {code}")
+
         try:
             page.fill("input[type='number']", code)
             page.click("button")
-        except:
-            print(f"[{idx}] ⚠️ ভেরিফিকেশন কোড ইনপুট বা সাবমিট বাটন পাওয়া যায়নি!")
+        except Exception:
+            print(f"[{idx}] ⚠️ ভেরিফিকেশন কোড ফিল্ড বা সাবমিট বোতাম পাওয়া যায়নি!")
 
         print(f"[{idx}] 🎉 সফলভাবে অ্যাকাউন্ট #{idx} তৈরি হয়েছে!")
 
