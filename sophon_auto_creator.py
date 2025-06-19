@@ -1,130 +1,92 @@
-import time
-import random
-import re
-import requests
-import string
-from playwright.sync_api import sync_playwright
+const puppeteer = require('puppeteer');
+const axios = require('axios');
 
-INVITE_URL = "https://app.sophon.xyz/invite/"
+// CONFIG
+const INVITE_URL = "https://app.sophon.xyz/invite/";
+const DOMAIN = "1secmail.com"; // আপনার টেম্প মেইল ডোমেইন
 
-GETNADA_DOMAINS = [
-    "getnada.com", "nada.email", "amail.club", "robot-mail.com",
-    "tafmail.com", "dropjar.com", "easytrashmail.com"
-]
+function generateRandomString(length = 10) {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    return [...Array(length)].map(() => chars[Math.floor(Math.random() * chars.length)]).join('');
+}
 
-def random_string(length=10):
-    letters = string.ascii_lowercase + string.digits
-    return ''.join(random.choice(letters) for _ in range(length))
+async function getVerificationCode(login, waitTime = 120000) {
+    const start = Date.now();
+    const checkInterval = 5000;
+    const regex = /Enter the code below on the login screen to continue:\s*(\d{6})/;
 
-def create_temp_email():
-    user = random_string(10)
-    domain = random.choice(GETNADA_DOMAINS)
-    email = f"{user}@{domain}"
-    return user, domain, email
+    while (Date.now() - start < waitTime) {
+        try {
+            const inbox = await axios.get(`https://www.1secmail.com/api/v1/?action=getMessages&login=${login}&domain=${DOMAIN}`);
+            if (inbox.data.length > 0) {
+                const msgId = inbox.data[0].id;
+                const message = await axios.get(`https://www.1secmail.com/api/v1/?action=readMessage&login=${login}&domain=${DOMAIN}&id=${msgId}`);
+                const body = message.data.body || message.data.textBody;
+                const match = body.match(regex);
+                if (match) return match[1];
+            }
+        } catch (err) {
+            console.log("⏳ Waiting for email...");
+        }
+        await new Promise(r => setTimeout(r, checkInterval));
+    }
+    return null;
+}
 
-def get_messages(username):
-    url = f"https://getnada.com/api/v1/inboxes/{username}"
-    try:
-        resp = requests.get(url)
-        resp.raise_for_status()
-        return resp.json().get("msgs", [])
-    except Exception as e:
-        print(f"Error fetching messages for {username}: {e}")
-        return []
+async function createAccount(inviteCode, index) {
+    const login = generateRandomString(10);
+    const email = `${login}@${DOMAIN}`;
+    console.log(`[${index}] 📧 Using temp email: ${email}`);
 
-def read_message(message_id):
-    url = f"https://getnada.com/api/v1/messages/{message_id}"
-    try:
-        resp = requests.get(url)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        print(f"Error reading message {message_id}: {e}")
-        return None
+    const browser = await puppeteer.launch({ headless: true });
+    const page = await browser.newPage();
 
-def get_verification_code(username, wait_time=120):
-    start = time.time()
-    pattern = r"Enter the code below on the login screen to continue:\s*(\d{6})"
-    while time.time() - start < wait_time:
-        msgs = get_messages(username)
-        for m in msgs:
-            md = read_message(m["uid"])
-            if not md:
-                continue
-            body = md.get("text", "") + " " + md.get("html", "")
-            print(f"[DEBUG] মেইল:\n{body}\n{'-'*50}")
-            match = re.search(pattern, body)
-            if match:
-                return match.group(1)
-        time.sleep(5)
-    return None
+    try {
+        await page.goto(INVITE_URL, { waitUntil: 'networkidle2' });
 
-def create_account(playwright, invite_code, idx):
-    browser = playwright.chromium.launch(headless=True)
-    context = browser.new_context(ignore_https_errors=True)
-    page = context.new_page()
+        await page.waitForSelector("input[type='email'], #email_field", { timeout: 10000 });
+        const emailInput = await page.$("input[type='email'], #email_field");
+        await emailInput.type(email);
 
-    try:
-        user, domain, email = create_temp_email()
-        print(f"[{idx}] 📧 টেম্প ইমেইল: {email}")
+        const textInputs = await page.$$("input[type='text']");
+        if (textInputs.length > 0) {
+            await textInputs[0].type(inviteCode);
+        }
 
-        page.goto(INVITE_URL, wait_until="load")
-        time.sleep(2)
+        const button = await page.$("button");
+        await button.click();
 
-        # ইমেইল ইনপুট
-        filled = False
-        try:
-            page.fill("#email_field", email)
-            filled = True
-        except:
-            inputs = page.locator("input")
-            for i in range(inputs.count()):
-                ph = inputs.nth(i).get_attribute("placeholder") or ""
-                if "email" in ph.lower():
-                    inputs.nth(i).fill(email)
-                    filled = True
-                    break
-        if not filled:
-            print(f"[{idx}] ⚠️ ইমেইল ইনপুট খুঁজে পাওয়া যায়নি!")
+        console.log(`[${index}] 📨 Waiting for verification code...`);
+        const code = await getVerificationCode(login);
+        if (!code) {
+            console.log(`[${index}] ❌ Code not received.`);
+            return;
+        }
 
-        # ইনভাইট কোড
-        try:
-            page.fill("input[type='text']", invite_code)
-        except:
-            print(f"[{idx}] ⚠️ ইনভাইট কোড ফিল করতে সমস্যা!")
+        console.log(`[${index}] ✅ Received code: ${code}`);
+        await page.waitForSelector("input[type='number']", { timeout: 10000 });
+        await page.type("input[type='number']", code);
+        await page.click("button");
 
-        page.click("button")
-        print(f"[{idx}] 📨 ইনভাইট ও মেইল সাবমিট, কোড অপেক্ষা করছে...")
+        console.log(`[${index}] 🎉 Account created!`);
+    } catch (err) {
+        console.error(`[${index}] ❌ Error: ${err.message}`);
+    } finally {
+        await browser.close();
+    }
+}
 
-        code = get_verification_code(user)
-        if not code:
-            print(f"[{idx}] ❌ কোড পাওয়া যায়নি।")
-            return
-        print(f"[{idx}] ✅ কোড পাওয়া গেছে: {code}")
+(async () => {
+    const inviteCode = process.argv[2];
+    const total = parseInt(process.argv[3]) || 1;
 
-        # অটোমেটিক কোড এন্ট্রি ও সাবমিশন
-        try:
-            page.fill("input[type='number']", code)
-            time.sleep(1)
-            page.click("button")
-            print(f"[{idx}] 🎉 অ্যাকাউন্ট #{idx} তৈরি হয়েছে!")
-        except Exception as e:
-            print(f"[{idx}] ⚠️ কোড সাবমিটে সমস্যা: {e}")
+    if (!inviteCode) {
+        console.log("❗ Usage: node script.js <INVITE_CODE> <NUMBER_OF_ACCOUNTS>");
+        process.exit(1);
+    }
 
-    except Exception as err:
-        print(f"[{idx}] ❌ এরর: {err}")
-    finally:
-        context.close()
-        browser.close()
-
-def main():
-    invite = input("🔑 Sophon ইনভাইট কোড দিন: ").strip()
-    num = int(input("🔢 কতগুলো অ্যাকাউন্ট বানাবেন?: "))
-
-    with sync_playwright() as pw:
-        for i in range(1, num + 1):
-            create_account(pw, invite, i)
-            time.sleep(random.uniform(5, 8))
-
-if __name__ == "__main__":
-    main()
+    for (let i = 1; i <= total; i++) {
+        await createAccount(inviteCode, i);
+        await new Promise(r => setTimeout(r, 5000 + Math.random() * 3000));
+    }
+})();
